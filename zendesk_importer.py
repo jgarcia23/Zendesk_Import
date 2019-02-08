@@ -146,11 +146,14 @@ def create_tickets(tickets, session, user_map, org_map, comments):
     tickets_dict = {"tickets": []}  # tickets dictionary
 
     # iterate through all tickets
-    for i in range(1, len(tickets)):
+    count = 0
+    for i in range(1700, len(tickets)):
         #  tagging my name
-        tags = json.loads(validate_array(tickets[i][17]))
-        tags.append('joseluis')
-
+        try:
+            tags = json.loads(validate_array(tickets[i][17]))
+            tags.append('joseluis')
+        except IndexError:
+            continue
         # initialize all variable fields for the data body
         external_id = validate(tickets[i][0])
         created_at = validate(tickets[i][2])
@@ -191,10 +194,27 @@ def create_tickets(tickets, session, user_map, org_map, comments):
             }
 
         }
-
+        count +=1
         # Check for special cases were the submitter,requester, or assignee do not exist
         # then use a Generic Agent user (ID: 376281270772)
-        data = check_user_exist(submitter, requester, assignee, user_map, data)
+        if submitter not in user_map:
+            submitter = '376281270772'
+            data.update({"submitter_id": submitter})
+        else:
+            data.update({"submitter_id": user_map[submitter]})
+
+        if requester not in user_map:
+            requester = '376281270772'
+            data.update({"requester_id": requester})
+        else:
+            data.update({"requester_id": user_map[requester]})
+
+        if assignee not in user_map:
+            assignee = '376281270772'
+            data.update({"assignee_id": assignee})
+        else:
+            data.update({"assignee_id": user_map[assignee]})
+        # data = check_user_exist(submitter, requester, assignee, user_map, data)
 
         tickets_dict["tickets"].append(data)  # add data to tickets dict
 
@@ -202,13 +222,19 @@ def create_tickets(tickets, session, user_map, org_map, comments):
         if len(tickets_dict["tickets"]) == 100:
             payloads.append(json.dumps(tickets_dict))
             tickets_dict = {"tickets": []}  # reset dict
-
+    print(count)
     # check if any data is in the dictionary since it does not always reach 100
     if tickets_dict["tickets"]:
         payloads.append(json.dumps(tickets_dict))
-
-    send_payloads(payloads)  # Send payloads
-
+    print(payloads)
+    # for payload in payloads:
+    #     r = session.post(URL, data=payload)
+    #     result = r.json()
+    #     if r.status_code == 429:  # rate limited error code
+    #         print("Rate is limited. Waiting to retry...")
+    #         time.sleep(int(r.headers['retry-after']))
+    #         continue
+    #     print(result)
 
 # Function creates multi organization memberships for users with more than one membership
 def create_org_memberships(session, org_memberships, user_map, org_map):
@@ -397,7 +423,6 @@ def create_users(users, session, org_map, org_memberships):
 
     send_payloads(URL, end_user_payload, session)  # send end-users payloads
 
-    # send agents payloads
     send_payloads("https://z3nplatformdevjg.zendesk.com/api/v2/users/create_or_update_many.json", agents_payload,
                   session)
 
@@ -410,11 +435,7 @@ def send_payloads(URL, payloads, session):
         if r.status_code >= 400:  # error code above 400 is a Bad Request error is an HTTP status code
             print('Error with status code {}'.format(r.status_code))
             exit()
-        elif r.status_code == 429:  # rate limited error code
-            print("Rate is limited. Waiting to retry...")
-            time.sleep(int(r.headers['retry-after']))
-            continue
-        print('Check on the job statuses for more information')
+        print('Succesfully sent check job statuses for more information')
         print(result)
 
 
@@ -455,8 +476,7 @@ def main():
     create_org_memberships(session, org_memberships, user_map, org_map) # Create memberships for users with multi org's
     comments = get_comments(comments_data) # get comments
 
-    create_tickets(tickets_data, session, user_map, org_map, comments) # Create tickets (note* rate is limited due to free trial)
-
+    # create_tickets(tickets_data, session, user_map, org_map, comments) # Create tickets (note* rate is limited due to free trial)
 
 if __name__ == '__main__':
     main()
