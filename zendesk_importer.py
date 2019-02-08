@@ -1,18 +1,157 @@
-import json, csv
+import json, csv, time
 import requests
 
 
-def create_tickets(tickets, session, user_map, org_map,comments):
-    URL = 'https://z3nplatformdevjg.zendesk.com/api/v2/imports/tickets/create_many.json'
-    payloads = []
-    tickets_dict = {"tickets": []}
+# Author: Joseluis Garcia
+# jgarcia23
 
+# Zendesk_importer is to import the data from the 4 files contained in the Zip file into the
+# zendesk instance. Create tickets, along with their associated users. The
+# users will include both agent level users, who may be assigned to the tickets, and end-users who
+# will have requested or commented on the tickets. Additionally, the end-users may be members of
+# one or more organizations.
+
+
+# Function creates a map for each organization with the organizations external_id as a key and generated id as a value
+def get_org_map(session):
+    # end-point
+    url = 'https://z3nplatformdevjg.zendesk.com/api/v2/organizations.json '
+    org_map = {}
+    next_page = True
+
+    while (next_page):
+        r = session.get(url)
+        response = r.json()
+
+        for org in response['organizations']:
+            org_map[org['external_id']] = org['id']
+        if response['next_page'] == None:
+            next_page = False
+        else:
+            url = response['next_page']
+    return org_map
+
+
+# Function creates a map for each user with their external_id as a key and generated id as a value
+def get_user_map(session):
+    url = 'https://z3nplatformdevjg.zendesk.com/api/v2/users.json '
+    user_map = {}
+    next_page = True
+
+    while (next_page):  # keep looping until next_page equals null
+        r = session.get(url)
+        response = r.json()
+        for user in response['users']:
+            user_map[user['external_id']] = user['id']
+        if response['next_page'] == None:
+            next_page = False
+        else:
+            url = response['next_page']
+    return user_map
+
+
+def get_comments(file):
+    comments = []  # array to return full of comments
+    for i in range(1, len(file)):  # iterate through all file comments
+
+        author_id = validate(file[i][1])
+        html_body = validate(file[i][2])
+        public = validate(file[i][3])
+        created_at = validate(file[i][4])
+        parent_ticket_id = validate(file[i][5])
+
+        data = {
+            "author_id": author_id,
+            "html_body": html_body,
+            "public": public,
+            "created_at": created_at,
+            "parent_ticket_id": parent_ticket_id,
+        }
+
+        comments.append(data)
+    return comments
+
+
+# Function translates statuses from Legacy Status to Zendesk Status
+def ticket_status_filter(status):
+    if status == "assigned":
+        status = "Open"
+    elif status == "waiting":
+        status = "Pending"
+    elif status == "external" or status == "engineering":
+        status = "On Hold"
+    elif status == "resolved":
+        status = "Solved"
+    elif status == "done" or status == "retracted":
+        status = "Closed"
+    return status
+
+
+# Function checks for special cases were the submitter,requester, or assignee do not exist
+# then use a Generic Agent user (ID: 376281270772)
+def check_user_exist(submitter, requester, assignee, user_map, data):
+    data = data
+
+    if submitter not in user_map:
+        submitter = '376281270772'
+        data.update({"submitter_id": submitter})
+    else:
+        data.update({"submitter_id": user_map[submitter]})
+
+    if requester not in user_map:
+        requester = '376281270772'
+        data.update({"requester_id": requester})
+    else:
+        data.update({"requester_id": user_map[requester]})
+
+    if assignee not in user_map:
+        assignee = '376281270772'
+        data.update({"assignee_id": assignee})
+    else:
+        data.update({"assignee_id": user_map[assignee]})
+    return data
+
+
+# Function validates that the field exist otherwise replace with None
+def validate(field):
+    temp = len(field)
+    if temp == 0:
+        return None
+    return field
+
+
+# Function cleans out the data by replacing all error regex and returns a clean string
+def validate_array(str):
+    for r in (("'", '"'), ("(", ''), (")", ''), ("_", ''), ("-", '')):
+        str = str.replace(*r)
+    return str.strip()
+
+
+#  Function checks if users is linked to multi organizations if so convert info to array and return
+def validate_organization(org_value, org_map, org_array):
+    if org_value[0] == '[':
+        external_org_ids = json.loads(validate_array(org_value))
+        org_array = list(
+            map(lambda org_id: org_map[org_id], external_org_ids))  # convert each external org id to zendesk ids
+
+        return None, org_array
+
+    else:
+        return org_map[org_value], org_array
+
+
+def create_tickets(tickets, session, user_map, org_map, comments):
+    URL = 'https://z3nplatformdevjg.zendesk.com/api/v2/imports/tickets/create_many.json'  # api-endpoint
+    payloads = []  # array of payloads to be sent
+    tickets_dict = {"tickets": []}  # tickets dictionary
+
+    # iterate through all tickets
     for i in range(1, len(tickets)):
         #  tagging my name
         tags = json.loads(validate_array(tickets[i][17]))
         tags.append('joseluis')
 
-
+        # initialize all variable fields for the data body
         external_id = validate(tickets[i][0])
         created_at = validate(tickets[i][2])
         subject = validate(tickets[i][3])
@@ -27,8 +166,9 @@ def create_tickets(tickets, session, user_map, org_map,comments):
         product_information = validate(tickets[i][14])
         date = validate(tickets[i][15])
         subscription = validate(tickets[i][16])
-
-        comments = []
+        submitter = tickets[i][6]
+        requester = tickets[i][7]
+        assignee = tickets[i][1]
 
         data = {
             "external_id": external_id,
@@ -52,103 +192,25 @@ def create_tickets(tickets, session, user_map, org_map,comments):
 
         }
 
-        submitter = tickets[i][6]
-        requester = tickets[i][7]
-        assinee = tickets[i][1]
+        # Check for special cases were the submitter,requester, or assignee do not exist
+        # then use a Generic Agent user (ID: 376281270772)
+        data = check_user_exist(submitter, requester, assignee, user_map, data)
 
-        if submitter not in user_map:
-            submitter = '376281270772'
-            data.update({"submitter_id":submitter})
-        else:
-            data.update({"submitter_id":user_map[submitter]})
+        tickets_dict["tickets"].append(data)  # add data to tickets dict
 
-        if requester not in user_map:
-            requester = '376281270772'
-            data.update({"requester_id": requester})
-        else:
-            data.update({"requester_id": user_map[requester]})
-
-        if assinee not in user_map:
-            assinee = '376281270772'
-            data.update({"assignee_id": assinee})
-        else:
-            data.update({"assignee_id": user_map[assinee]})
-
-
-        tickets_dict["tickets"].append(data)
+        # check if dict reaches the limit of 100 if-so dump in payloads
         if len(tickets_dict["tickets"]) == 100:
             payloads.append(json.dumps(tickets_dict))
-            tickets_dict = {"tickets": []}
+            tickets_dict = {"tickets": []}  # reset dict
+
+    # check if any data is in the dictionary since it does not always reach 100
     if tickets_dict["tickets"]:
         payloads.append(json.dumps(tickets_dict))
 
-    for load in payloads:
-        print(load)
-        r = session.post(URL, data=load)
-        result = r.json()
-        print(result)
+    send_payloads(payloads)  # Send payloads
 
 
-
-def ticket_status_filter(status):
-
-    if status == "assigned":
-        status = "Open"
-    elif status ==  "waiting":
-        status = "Pending"
-    elif status == "external" or status == "engineering":
-        status = "On Hold"
-    elif status == "resolved":
-        status = "Solved"
-    elif status == "done" or status == "retracted":
-        status = "Closed"
-
-    return
-
-def get_comments(file):
-
-    payloads = []
-    comments = []
-
-    for i in range(1, len(file)):
-
-
-        author_id = validate(file[i][1])
-        html_body = validate(file[i][2])
-        public = validate(file[i][3])
-        created_at= validate(file[i][4])
-        parent_ticket_id = validate(file[i][5])
-
-        data = {
-            "author_id": author_id,
-            "html_body": html_body,
-            "public": public,
-            "created_at": created_at,
-            "parent_ticket_id": parent_ticket_id,
-        }
-
-        comments.append(data)
-    return comments
-
-def get_user_map(session):
-    url = 'https://z3nplatformdevjg.zendesk.com/api/v2/users.json '
-    user_map = {}
-    next_page = True
-
-    while (next_page):
-        r = session.get(url)
-        response = r.json()
-
-        for user in response['users']:
-            user_map[user['external_id']] = user['id']
-
-        if response['next_page'] == None:
-            next_page = False
-        else:
-            url = response['next_page']
-    return user_map
-
-
+# Function creates multi organization memberships for users with more than one membership
 def create_org_memberships(session, org_memberships, user_map, org_map):
     URL = "https://z3nplatformdevjg.zendesk.com/api/v2/organization_memberships/create_many.json"
     payload = []
@@ -156,175 +218,87 @@ def create_org_memberships(session, org_memberships, user_map, org_map):
 
     for member in org_memberships:
 
+        # initialize variable fields for the data body
         user_id = user_map[member]
         membership_array = org_memberships[member]
 
         for org in membership_array:
             org_id = org
-            # print(org_id)
             data = {
                 "user_id": int(user_id),
                 "organization_id": int(org_id)
-
             }
-
+            # check if it is the first organization set default as true else false
             if org == membership_array[0]:
                 data.update({"default": True})
             else:
                 data.update({"default": False})
 
-            org_dict["organization_memberships"].append(data)
+            org_dict["organization_memberships"].append(data)  # add data to dictionary
 
+            # check if org_dict reaches the limit of 100 if-so dump in payload
             if len(org_dict["organization_memberships"]) == 100:
                 payload.append(json.dumps(org_dict))
-                org_dict = {"organization_memberships": []}
+                org_dict = {"organization_memberships": []}  # reset dict
 
-    if org_dict["organization_memberships"]:
+    if org_dict["organization_memberships"]:  # check if any extra data is in the dic
         payload.append(json.dumps(org_dict))
-    # print(payload)
-    # for load in payload:
-    #     r = session.post(URL, data=load)
-    #     result = r.json()
-    #     print(result)
+
+    send_payloads(URL, payload, session)  # send payloads
 
 
-def get_org_map(session):
-    url = 'https://z3nplatformdevjg.zendesk.com/api/v2/organizations.json '
-    org_map = {}
-    next_page = True
-
-    while (next_page):
-        r = session.get(url)
-        response = r.json()
-
-        for org in response['organizations']:
-            org_map[org['external_id']] = org['id']
-        if response['next_page'] == None:
-            next_page = False
-        else:
-            url = response['next_page']
-    return org_map
-
-
-def job_statuses(status_list, session):
-    status_id_list = []
-    for line in status_list:
-        id = line['job_status']['id']  # get the id
-        status_id_list.append(id)
-
-    url_paste = ",".join(str(x) for x in status_id_list)
-    url = 'https://z3nplatformdevjg.zendesk.com/api/v2/job_statuses/show_many.json?ids=' + url_paste
-    r = session.get(url)
-    response = r.json()
-    print(response)
-    # completed = False
-
-
-# while not completed:
-#
-#     for status in response['job_statuses']:
-#         status = status['status']
-#         if status == "queued" or status == "working":
-#             success_count = 0
-#             print('In progress...')
-#             time.sleep(10)
-#             continue
-#         elif status == "failed" or status == "killed":
-#             print('Failed')
-#             time.sleep(5)
-#             exit()
-#         elif status == 'completed':
-#             success_count += 1
-#             if success_count == response['count']:
-#                 completed = True
-#                 print('Successfully imported a batch of organizations')
-#                 break
-#             continue    # Continue checking job statuses if not all are completed
-#     response = r.json()
-
-def validate(field):
-    temp = len(field)
-    if temp == 0:
-        return None
-    return field
-
-
-def validate_array(str):
-    for r in (("'", '"'), ("(", ''), (")", ''), ("_", ''), ("-", '')):
-        str = str.replace(*r)
-    return str.strip()
-
-
-def validate_organization(org_value, org_map, org_array):
-    if org_value[0] == '[':
-        external_org_ids = json.loads(validate_array(org_value))
-        # convert each external org id to zendesk ids
-        org_array = list(map(lambda org_id: org_map[org_id], external_org_ids))
-
-        return None, org_array
-
-    else:
-        return org_map[org_value], org_array
-
-
-def create_organizations(organizations, session, org_map):
+# Function creates organizations into the zendesk instance
+def create_organizations(organizations, session):
     URL = "https://z3nplatformdevjg.zendesk.com/api/v2/organizations/create_many.json "
-    payloads = []
+    payloads = []  # payloads to be sent
     org_dict = {"organizations": []}
     status_list = []
 
-    try:
-        for i in range(1, len(organizations)):
+    # iterate through all organizations
+    for i in range(1, len(organizations)):
 
-            #  tagging my name
-            tags = json.loads(validate_array(organizations[i][6]))
-            tags.append('joseluis')
+        #  tagging my name
+        tags = json.loads(validate_array(organizations[i][6]))
+        tags.append('joseluis')
 
-            domain_names = json.loads(validate_array(organizations[i][2]))
+        domain_names = json.loads(validate_array(organizations[i][2]))
 
-            id = validate(organizations[i][0])
-            name = validate(organizations[i][1])
-            domain_names = validate(domain_names)
-            details = validate(organizations[i][3])
-            notes = validate(organizations[i][4])
-            merchant_id = validate(organizations[i][5])
+        # initialize all variable fields for the data body
+        id = validate(organizations[i][0])
+        name = validate(organizations[i][1])
+        domain_names = validate(domain_names)
+        details = validate(organizations[i][3])
+        notes = validate(organizations[i][4])
+        merchant_id = validate(organizations[i][5])
 
-            data = {
-                "external_id": int(id),
-                "name": name,
-                "domain_names": domain_names,
-                "details": details,
-                "notes": notes,
-                "tags": tags,
-                "organization_fields": {
-                    "merchant_id'": merchant_id,
-                }
+        data = {
+            "external_id": int(id),
+            "name": name,
+            "domain_names": domain_names,
+            "details": details,
+            "notes": notes,
+            "tags": tags,
+            "organization_fields": {
+                "merchant_id'": merchant_id,
             }
+        }
 
-            org_dict["organizations"].append(data)
+        org_dict["organizations"].append(data)  # add data to dict
 
-            if len(org_dict["organizations"]) == 100:
-                payloads.append(json.dumps(org_dict))
-                org_dict = {"organizations": []}
+        # check if org_dict reaches the limit of 100 if-so dump in payloads
+        if len(org_dict["organizations"]) == 100:
+            payloads.append(json.dumps(org_dict))
+            org_dict = {"organizations": []}
 
-    except IndexError:
-        pass
-
-    except ValueError:
-        pass
-
+    # check if any organizations are in org_dict since they dont always reach 100
     if org_dict["organizations"]:
         payloads.append(json.dumps(org_dict))
+
     # iterate through the payloads list and post one payload at a time to Zendesk Support
-    # for payload in payloads:
-    #     r = session.post(URL, data=payload)
-    #     pastebin_url = r.json()
-    #     print(pastebin_url)
-        # status_list.append(pastebin_url)
-    #
-    # job_statuses(status_list, session)
+    send_payloads(URL, payloads, session)
 
 
+# Function creates both end-users and agent/admin users into the zendesk instance
 def create_users(users, session, org_map, org_memberships):
     # api-endpoint
     URL = "https://z3nplatformdevjg.zendesk.com/api/v2/users/create_many.json"
@@ -346,9 +320,11 @@ def create_users(users, session, org_map, org_memberships):
         else:
             emails_map[user[2]] += 1
 
+    # iterate through all users
     for i in range(1, len(users)):
 
         org_array = []
+
         if (emails_map[users[i][2]]) <= 1 or (users[i][2] == ''):
 
             #  tagging my name
@@ -356,10 +332,11 @@ def create_users(users, session, org_map, org_memberships):
             try:
                 tags = json.loads(validate_array(users[i][11]))
                 tags.append("joseluis")
-            # count1 += 1
+
             except IndexError:
                 continue
 
+            # initialize all variable fields for the data body
             id = validate(users[i][0])
             name = validate(users[i][1])
             email = validate(users[i][2])
@@ -398,86 +375,87 @@ def create_users(users, session, org_map, org_memberships):
 
             # append to correct dictionary either end-users or agent and admin users
             if role == 'end-user':
-
                 end_users_dict["users"].append(data)
 
-                if len(end_users_dict["users"]) == 100:
+                if len(end_users_dict["users"]) == 100:  # check if dict reaches the limit of 100 if-so dump in payloads
                     end_user_payload.append(json.dumps(end_users_dict))
-                    end_users_dict = {"users": []}
+                    end_users_dict = {"users": []}  # reset dict
 
             elif role == 'agent' or role == 'admin':
-
                 agent_users_dict["users"].append(data)
 
-                if len(agent_users_dict["users"]) == 100:
+                if len(agent_users_dict[
+                           "users"]) == 100:  # check if dict reaches the limit of 100 if-so dump in payloads
                     agents_payload.append(json.dumps(agent_users_dict))
-                    agent_users_dict = {"users": []}
+                    agent_users_dict = {"users": []}  # reset dict
 
+    # check if any end-users or agents are in dictionaries since they do not always reach 100
     if end_users_dict["users"]:
         end_user_payload.append(json.dumps(end_users_dict))
-    #
     if agent_users_dict["users"]:
         agents_payload.append(json.dumps(agent_users_dict))
 
-    # # # iterate through the payloads list and post one payload at a time to Zendesk Support
-    # for payload in end_user_payload:
-    #     print(payload)
-    #     r = session.post(URL, data=payload)
-    #     result = r.json()
-    #     print(result)
-    # # #
-    # for load in agents_payload:
-    #     r = session.post("https://z3nplatformdevjg.zendesk.com/api/v2/users/create_or_update_many.json", data=load)
-    #     result = r.json()
-    #     print(result)
-def read_csv_tickets(tickets_file):
-    # This function reads the data from the csv file
-    csvReader = csv.reader(tickets_file,newline='')
-    data = list(csvReader)
-    header = data[:1]
+    send_payloads(URL, end_user_payload, session)  # send end-users payloads
 
-    return data
+    # send agents payloads
+    send_payloads("https://z3nplatformdevjg.zendesk.com/api/v2/users/create_or_update_many.json", agents_payload,
+                  session)
 
+
+# Function iterates through the payloads and post one payload at a time to a Zendesk Instance
+def send_payloads(URL, payloads, session):
+    for payload in payloads:
+        r = session.post(URL, data=payload)
+        result = r.json()
+        if r.status_code >= 400:  # error code above 400 is a Bad Request error is an HTTP status code
+            print('Error with status code {}'.format(r.status_code))
+            exit()
+        elif r.status_code == 429:  # rate limited error code
+            print("Rate is limited. Waiting to retry...")
+            time.sleep(int(r.headers['retry-after']))
+            continue
+        print('Check on the job statuses for more information')
+        print(result)
+
+
+# This function reads the data from the csv file
 def read_csv(file):
-    # This function reads the data from the csv file
     csvReader = csv.reader(file)
     data = list(csvReader)
     header = data[:1]
 
     return data
 
-
+# Main function
 def main():
     # creates a requests session object and configures it with your authentication information.
     session = requests.Session()
     session.headers = {'Content-Type': 'application/json'}
     session.auth = 'garciajrjoseluis@gmail.com/token', 'c2hERX4JpJ6b8IZjtrCYTxkSegxThaOk1o8oJhSA'
 
-    # Opening csv
+    # Opening csv files
     organizations_file = open('organizations.csv')
     comments_file = open('ticket_comments.csv')
     tickets_file = open('tickets.csv')
     users_file = open('users.csv')
 
-    # Read the data from the csv file
+    # Reading the data from the csv file
     organizations_data = read_csv(organizations_file)
     comments_data = read_csv(comments_file)
     tickets_data = read_csv(tickets_file)
     users_data = read_csv(users_file)
 
-    # organization map with org id and external id
-    org_map = get_org_map(session)
+    create_organizations(organizations_data, session)  # Create organizations
+    org_map = get_org_map(session)  # organization map with { external id: org_id }
+    org_memberships = {}  # map of members with multi memberships
 
-    org_memberships = {}
+    create_users(users_data, session, org_map, org_memberships)  # Create users
+    user_map = get_user_map(session) # user map with {external id: user_id }
 
-    create_organizations(organizations_data, session, org_map)
-    create_users(users_data, session, org_map, org_memberships)
-    #
-    user_map = get_user_map(session)
-    create_org_memberships(session, org_memberships, user_map, org_map)
-    comments = get_comments(comments_data)
+    create_org_memberships(session, org_memberships, user_map, org_map) # Create memberships for users with multi org's
+    comments = get_comments(comments_data) # get comments
 
-    create_tickets(tickets_data, session, user_map, org_map,comments)
+    create_tickets(tickets_data, session, user_map, org_map, comments) # Create tickets (note* rate is limited due to free trial)
 
 
 if __name__ == '__main__':
