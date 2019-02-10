@@ -60,6 +60,9 @@ def get_comments(file):
         created_at = validate(file[i][4])
         parent_ticket_id = validate(file[i][5])
 
+        if(int(author_id) < 0):
+            author_id = '376281270772'
+
         data = {
             "author_id": author_id,
             "html_body": html_body,
@@ -147,11 +150,13 @@ def create_tickets(tickets, session, user_map, org_map, comments):
 
     # iterate through all tickets
     count = 0
-    for i in range(1, len(tickets)):
+    for i in range(1700, len(tickets)):
         #  tagging my name
-        tags = json.loads(validate_array(tickets[i][17]))
-        tags.append('joseluis')
-
+        try:
+            tags = json.loads(validate_array(tickets[i][17]))
+            tags.append('joseluis')
+        except IndexError:
+            continue
         # initialize all variable fields for the data body
         external_id = validate(tickets[i][0])
         created_at = validate(tickets[i][2])
@@ -167,9 +172,9 @@ def create_tickets(tickets, session, user_map, org_map, comments):
         product_information = validate(tickets[i][14])
         date = validate(tickets[i][15])
         subscription = validate(tickets[i][16])
-        submitter = validate(tickets[i][6])
-        requester = validate(tickets[i][7])
-        assignee = validate(tickets[i][1])
+        submitter = tickets[i][6]
+        requester = tickets[i][7]
+        assignee = tickets[i][1]
 
         data = {
             "external_id": external_id,
@@ -192,41 +197,52 @@ def create_tickets(tickets, session, user_map, org_map, comments):
             }
 
         }
-
         count +=1
         # Check for special cases were the submitter,requester, or assignee do not exist
         # then use a Generic Agent user (ID: 376281270772)
-        data = check_user_exist(submitter, requester, assignee, user_map, data)
+        if submitter not in user_map:
+            submitter = '376281270772'
+            data.update({"submitter_id": submitter})
+        else:
+            data.update({"submitter_id": user_map[submitter]})
+
+        if requester not in user_map:
+            requester = '376281270772'
+            data.update({"requester_id": requester})
+        else:
+            data.update({"requester_id": user_map[requester]})
+
+        if assignee not in user_map:
+            assignee = '376281270772'
+            data.update({"assignee_id": assignee})
+        else:
+            data.update({"assignee_id": user_map[assignee]})
+        # data = check_user_exist(submitter, requester, assignee, user_map, data)
 
         tickets_dict["tickets"].append(data)  # add data to tickets dict
 
         # check if dict reaches the limit of 100 if-so dump in payloads
-        if len(tickets_dict["tickets"]) == 100:
+        if len(tickets_dict["tickets"]) == 50:
             payloads.append(json.dumps(tickets_dict))
             tickets_dict = {"tickets": []}  # reset dict
+    # print(count)
     # check if any data is in the dictionary since it does not always reach 100
     if tickets_dict["tickets"]:
         payloads.append(json.dumps(tickets_dict))
-
     # print(payloads)
-    payload_count = 0
-    total = 0
     for payload in payloads:
-        # print(payload)
-        test = json.loads(payload)
-        for ticket in test['tickets']:
-            print('Payload #', payload_count, 'External id: ', ticket['external_id'], ', count: ', total)
-            total += 1
-        # print(test.keys())
-        payload_count += 1
-        # r = session.post(URL, data=payload)
-        # result = r.json()
-        # print(result)
-        # if r.status_code == 429:  # rate limited error code
-        #     print("Rate is limited. Waiting to retry...")
-        #     time.sleep(int(r.headers['retry-after']))
-        #     continue
-        # print(result)
+        r = session.post(URL, data=payload)
+        try:
+            result = r.json()
+        except json.decoder.JSONDecodeError:
+            # print('Failing Payload: ', payload)
+            print(r)
+            print('ERROR: ', r.text)
+        if r.status_code == 429:  # rate limited error code
+            print("Rate is limited. Waiting to retry...")
+            time.sleep(int(r.headers['retry-after']))
+            continue
+        print(result)
 
 # Function creates multi organization memberships for users with more than one membership
 def create_org_memberships(session, org_memberships, user_map, org_map):
@@ -262,7 +278,7 @@ def create_org_memberships(session, org_memberships, user_map, org_map):
     if org_dict["organization_memberships"]:  # check if any extra data is in the dic
         payload.append(json.dumps(org_dict))
 
-    # send_payloads(URL, payload, session)  # send payloads
+    send_payloads(URL, payload, session)  # send payloads
 
 
 # Function creates organizations into the zendesk instance
@@ -313,7 +329,7 @@ def create_organizations(organizations, session):
         payloads.append(json.dumps(org_dict))
 
     # iterate through the payloads list and post one payload at a time to Zendesk Support
-    # send_payloads(URL, payloads, session)
+    send_payloads(URL, payloads, session)
 
 
 # Function creates both end-users and agent/admin users into the zendesk instance
@@ -413,10 +429,10 @@ def create_users(users, session, org_map, org_memberships):
     if agent_users_dict["users"]:
         agents_payload.append(json.dumps(agent_users_dict))
 
-    # send_payloads(URL, end_user_payload, session)  # send end-users payloads
+    send_payloads(URL, end_user_payload, session)  # send end-users payloads
 
-    # send_payloads("https://z3nplatformdevjg.zendesk.com/api/v2/users/create_or_update_many.json", agents_payload,
-    #               session)
+    send_payloads("https://z3nplatformdevjg.zendesk.com/api/v2/users/create_or_update_many.json", agents_payload,
+                  session)
 
 
 # Function iterates through the payloads and post one payload at a time to a Zendesk Instance
@@ -444,7 +460,7 @@ def main():
     # creates a requests session object and configures it with your authentication information.
     session = requests.Session()
     session.headers = {'Content-Type': 'application/json'}
-    session.auth = 'garciajrjoseluis@gmail.com/token', 'c2hERX4JpJ6b8IZjtrCYTxkSegxThaOk1o8oJhSA'
+    session.auth = 'username', 'password'
 
     # Opening csv files
     organizations_file = open('organizations.csv')
@@ -453,7 +469,7 @@ def main():
     users_file = open('users.csv')
 
     # Reading the data from the csv file
-    # organizations_data = read_csv(organizations_file)
+    organizations_data = read_csv(organizations_file)
     comments_data = read_csv(comments_file)
     tickets_data = read_csv(tickets_file)
     users_data = read_csv(users_file)
@@ -461,6 +477,7 @@ def main():
     # create_organizations(organizations_data, session)  # Create organizations
     org_map = get_org_map(session)  # organization map with { external id: org_id }
     org_memberships = {}  # map of members with multi memberships
+
     # create_users(users_data, session, org_map, org_memberships)  # Create users
     user_map = get_user_map(session) # user map with {external id: user_id }
 
