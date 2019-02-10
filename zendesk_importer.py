@@ -60,6 +60,9 @@ def get_comments(file):
         created_at = validate(file[i][4])
         parent_ticket_id = validate(file[i][5])
 
+        if(int(author_id) < 0):
+            author_id = '376281270772'
+
         data = {
             "author_id": author_id,
             "html_body": html_body,
@@ -219,22 +222,27 @@ def create_tickets(tickets, session, user_map, org_map, comments):
         tickets_dict["tickets"].append(data)  # add data to tickets dict
 
         # check if dict reaches the limit of 100 if-so dump in payloads
-        if len(tickets_dict["tickets"]) == 100:
+        if len(tickets_dict["tickets"]) == 50:
             payloads.append(json.dumps(tickets_dict))
             tickets_dict = {"tickets": []}  # reset dict
-    print(count)
+    # print(count)
     # check if any data is in the dictionary since it does not always reach 100
     if tickets_dict["tickets"]:
         payloads.append(json.dumps(tickets_dict))
-    print(payloads)
-    # for payload in payloads:
-    #     r = session.post(URL, data=payload)
-    #     result = r.json()
-    #     if r.status_code == 429:  # rate limited error code
-    #         print("Rate is limited. Waiting to retry...")
-    #         time.sleep(int(r.headers['retry-after']))
-    #         continue
-    #     print(result)
+    # print(payloads)
+    for payload in payloads:
+        r = session.post(URL, data=payload)
+        try:
+            result = r.json()
+        except json.decoder.JSONDecodeError:
+            # print('Failing Payload: ', payload)
+            print(r)
+            print('ERROR: ', r.text)
+        if r.status_code == 429:  # rate limited error code
+            print("Rate is limited. Waiting to retry...")
+            time.sleep(int(r.headers['retry-after']))
+            continue
+        print(result)
 
 # Function creates multi organization memberships for users with more than one membership
 def create_org_memberships(session, org_memberships, user_map, org_map):
@@ -452,7 +460,7 @@ def main():
     # creates a requests session object and configures it with your authentication information.
     session = requests.Session()
     session.headers = {'Content-Type': 'application/json'}
-    session.auth = 'garciajrjoseluis@gmail.com/token', 'c2hERX4JpJ6b8IZjtrCYTxkSegxThaOk1o8oJhSA'
+    session.auth = 'username', 'password'
 
     # Opening csv files
     organizations_file = open('organizations.csv')
@@ -466,17 +474,17 @@ def main():
     tickets_data = read_csv(tickets_file)
     users_data = read_csv(users_file)
 
-    create_organizations(organizations_data, session)  # Create organizations
+    # create_organizations(organizations_data, session)  # Create organizations
     org_map = get_org_map(session)  # organization map with { external id: org_id }
     org_memberships = {}  # map of members with multi memberships
 
-    create_users(users_data, session, org_map, org_memberships)  # Create users
+    # create_users(users_data, session, org_map, org_memberships)  # Create users
     user_map = get_user_map(session) # user map with {external id: user_id }
 
-    create_org_memberships(session, org_memberships, user_map, org_map) # Create memberships for users with multi org's
+    # create_org_memberships(session, org_memberships, user_map, org_map) # Create memberships for users with multi org's
     comments = get_comments(comments_data) # get comments
 
-    # create_tickets(tickets_data, session, user_map, org_map, comments) # Create tickets (note* rate is limited due to free trial)
+    create_tickets(tickets_data, session, user_map, org_map, comments) # Create tickets (note* rate is limited due to free trial)
 
 if __name__ == '__main__':
     main()
