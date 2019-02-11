@@ -62,7 +62,11 @@ def get_comments(file):
         created_at = validate(file[i][4])
         parent_ticket_id = validate(file[i][5])
 
+<<<<<<< HEAD
         if (int(author_id) < 0):
+=======
+        if(int(author_id) < 0):
+>>>>>>> 7ccfd6bd1f9f36b16aa7346f2cbba400b6258f9b
             author_id = '376281270772'
 
         data = {
@@ -239,8 +243,23 @@ def create_tickets(tickets, session, user_map, org_map, comments):
         payloads.append(json.dumps(tickets_dict))
     # print(payloads)
     for payload in payloads:
+<<<<<<< HEAD
         send_request(URL, payload, session, 5)
 
+=======
+        r = session.post(URL, data=payload)
+        try:
+            result = r.json()
+        except json.decoder.JSONDecodeError:
+            # print('Failing Payload: ', payload)
+            print(r)
+            print('ERROR: ', r.text)
+        if r.status_code == 429:  # rate limited error code
+            print("Rate is limited. Waiting to retry...")
+            time.sleep(int(r.headers['retry-after']))
+            continue
+        print(result)
+>>>>>>> 7ccfd6bd1f9f36b16aa7346f2cbba400b6258f9b
 
 # Function creates multi organization memberships for users with more than one membership
 def create_org_memberships(session, org_memberships, user_map):
@@ -513,6 +532,7 @@ def main():
     users_data = read_csv(users_file)
 
     # create_organizations(organizations_data, session)  # Create organizations
+<<<<<<< HEAD
     # organization map with { external id: org_id }
     org_map = get_org_map(session)
     org_memberships = {}  # map of members with multi memberships
@@ -526,6 +546,18 @@ def main():
     create_tickets(tickets_data, session, user_map, org_map, comments)
     exit(0)
 
+=======
+    org_map = get_org_map(session)  # organization map with { external id: org_id }
+    org_memberships = {}  # map of members with multi memberships
+
+    # create_users(users_data, session, org_map, org_memberships)  # Create users
+    user_map = get_user_map(session) # user map with {external id: user_id }
+
+    # create_org_memberships(session, org_memberships, user_map, org_map) # Create memberships for users with multi org's
+    comments = get_comments(comments_data) # get comments
+
+    create_tickets(tickets_data, session, user_map, org_map, comments) # Create tickets (note* rate is limited due to free trial)
+>>>>>>> 7ccfd6bd1f9f36b16aa7346f2cbba400b6258f9b
 
 if __name__ == '__main__':
     main()
