@@ -51,7 +51,7 @@ def get_user_map(session):
             url = response['next_page']
     return user_map
 
-
+# extract comments from file and return comments
 def get_comments(file):
     comments = []  # array to return full of comments
     for i in range(1, len(file)):  # iterate through all file comments
@@ -70,7 +70,7 @@ def get_comments(file):
             "html_body": html_body,
             "public": public,
             "created_at": created_at,
-            "parent_ticket_id": parent_ticket_id,
+            "parent_ticket_id": parent_ticket_id
         }
 
         comments.append(data)
@@ -136,6 +136,7 @@ def validate_array(str):
 def validate_organization(org_value, org_map, org_array):
     if org_value[0] == '[':
         external_org_ids = json.loads(validate_array(org_value))
+
         # convert each external org id to zendesk ids
         org_array = list(map(lambda org_id: org_map[org_id], external_org_ids))
 
@@ -170,7 +171,7 @@ def check_job_statuses(status_list, session):
                     completed = True
                     print('Successfully imported a batch')
 
-
+# Get request from URL endpoint and handles 429 rate limited error
 def send_job_statuses_request(status_list, session, retry_attempts=5):
     print(status_list)
     status_id_list = list(map(lambda status: status['job_status']['id'], status_list))
@@ -181,7 +182,7 @@ def send_job_statuses_request(status_list, session, retry_attempts=5):
     url = 'https://z3nplatformdevjg.zendesk.com/api/v2/job_statuses/show_many.json?ids=' + url_paste
 
     try:
-        retry_attempts -= 1
+        retry_attempts -= 1 # Decrement
         r = session.get(url)
         r.raise_for_status()
         job_statuses = r.json()
@@ -192,7 +193,7 @@ def send_job_statuses_request(status_list, session, retry_attempts=5):
             print("Rate is limited. Waiting to retry...")
             time.sleep(int(r.headers['retry-after']))
             if retry_attempts > 0:
-                send_job_statuses_request(status_list, session, retry_attempts)
+                send_job_statuses_request(status_list, session, retry_attempts) # recurse until job is done 5 tries max
             else:
                 print("Retry Limit reached")
         print(err)
@@ -206,7 +207,7 @@ def send_payloads(URL, payloads, session, type):
     # Poll job status endpoint until all jobs complete or any one job fails
     check_job_statuses(status_list, session)
 
-
+#  Post request to URL endpoint and handle 400 < errors
 def send_create_many_request(URL, payload, session, status_list, type, retry_attempts=5):
     try:
         retry_attempts -= 1
@@ -219,21 +220,20 @@ def send_create_many_request(URL, payload, session, status_list, type, retry_att
             print("Rate is limited. Waiting to retry...")
             time.sleep(int(r.headers['retry-after']))
             if retry_attempts > 0:
-                send_create_many_request(URL, payload, session, retry_attempts)
+                send_create_many_request(URL, payload, session, retry_attempts) # recurse
             else:
                 print("Retry Limit reached")
         print(err)
         print_external_ids(payload, type)
 
-
+# get external ID's from payload being sent
 def print_external_ids(payload, type):
     failed_items = json.loads(payload)[type]
-    failed_ids = failed_items if type == 'organization_memberships' else list(
-        map(lambda resource: resource['external_id'], failed_items))
+    failed_ids = failed_items if type == 'organization_memberships' else list(map(lambda resource: resource['external_id'], failed_items))
     print("Failed to import this batch of ", type, ": ", failed_ids)
 
 
-def create_tickets(tickets, session, user_map, org_map, comments):
+def import_tickets(tickets, session, user_map, comments):
     URL = 'https://z3nplatformdevjg.zendesk.com/api/v2/imports/tickets/create_many.json'  # api-endpoint
     payloads = []  # array of payloads to be sent
     tickets_dict = {"tickets": []}  # tickets dictionary
@@ -302,12 +302,11 @@ def create_tickets(tickets, session, user_map, org_map, comments):
         payloads.append(json.dumps(tickets_dict))
 
     send_payloads(URL, payloads, session, 'tickets')
-    # for payload in payloads:
-    #     send_request(URL, payload, session, 5)
+
 
 
 # Function creates multi organization memberships for users with more than one membership
-def create_org_memberships(session, org_memberships, user_map):
+def import_org_memberships(session, org_memberships, user_map):
     URL = "https://z3nplatformdevjg.zendesk.com/api/v2/organization_memberships/create_many.json"
     payload = []
     org_dict = {"organization_memberships": []}
@@ -344,7 +343,7 @@ def create_org_memberships(session, org_memberships, user_map):
 
 
 # Function creates organizations into the zendesk instance
-def create_organizations(organizations, session):
+def import_organizations(organizations, session):
     URL = "https://z3nplatformdevjg.zendesk.com/api/v2/organizations/create_many.json "
     payloads = []  # payloads to be sent
     org_dict = {"organizations": []}
@@ -359,7 +358,7 @@ def create_organizations(organizations, session):
 
         domain_names = json.loads(validate_array(organizations[i][2]))
 
-        # initialize all variable fields for the data body
+        # initialize all variable fields for the body
         id = validate(organizations[i][0])
         name = validate(organizations[i][1])
         domain_names = validate(domain_names)
@@ -367,6 +366,7 @@ def create_organizations(organizations, session):
         notes = validate(organizations[i][4])
         merchant_id = validate(organizations[i][5])
 
+        # formatting into proper format for api
         data = {
             "external_id": int(id),
             "name": name,
@@ -375,18 +375,18 @@ def create_organizations(organizations, session):
             "notes": notes,
             "tags": tags,
             "organization_fields": {
-                "merchant_id'": merchant_id,
+                "merchant_id'": merchant_id
             }
         }
 
         org_dict["organizations"].append(data)  # add data to dict
 
-        # check if org_dict reaches the limit of 100 if-so dump in payloads
+        # create payloads with max 100 items each
         if len(org_dict["organizations"]) == 100:
             payloads.append(json.dumps(org_dict))
             org_dict = {"organizations": []}
 
-    # check if any organizations are in org_dict since they dont always reach 100
+    # check if there are any items the last payload < 100
     if org_dict["organizations"]:
         payloads.append(json.dumps(org_dict))
 
@@ -395,18 +395,17 @@ def create_organizations(organizations, session):
 
 
 # Function creates both end-users and agent/admin users into the zendesk instance
-def create_users(users, session, org_map, org_memberships):
-    # api-endpoint
-    URL = "https://z3nplatformdevjg.zendesk.com/api/v2/users/create_many.json"
+def import_users(users, session, org_map, org_memberships):
+    # api-endpoints
+    end_users_url_endpoint = "https://z3nplatformdevjg.zendesk.com/api/v2/users/create_many.json"
+    agent_url_endpoint = "https://z3nplatformdevjg.zendesk.com/api/v2/users/create_or_update_many.json"
 
     end_user_payload = []
     agents_payload = []
-
     emails_map = {}  # contains emails with their frequency occurance
 
     end_users_dict = {"users": []}  # map of end users
     agent_users_dict = {"users": []}  # map of end users
-    count = 0
 
     # creating dict of emails with its frequency in the data
     for user in users:
@@ -467,8 +466,7 @@ def create_users(users, session, org_map, org_memberships):
             if organization_id:
                 data.update({"organization_id": int(organization_id)})
             else:
-                org_memberships[
-                    id] = org_array  # associate all multiple org memberships with external user id until we can look up zendesk id
+                org_memberships[id] = org_array  # associate all multiple org memberships with external user id until we can look up zendesk id
 
             # append to correct dictionary either end-users or agent and admin users
             if role == 'end-user':
@@ -482,8 +480,7 @@ def create_users(users, session, org_map, org_memberships):
             elif role == 'agent' or role == 'admin':
                 agent_users_dict["users"].append(data)
 
-                if len(agent_users_dict[
-                           "users"]) == 100:  # check if dict reaches the limit of 100 if-so dump in payloads
+                if len(agent_users_dict["users"]) == 100:  # check if dict reaches the limit of 100 if-so dump in payloads
                     agents_payload.append(json.dumps(agent_users_dict))
                     agent_users_dict = {"users": []}  # reset dict
 
@@ -493,10 +490,9 @@ def create_users(users, session, org_map, org_memberships):
     if agent_users_dict["users"]:
         agents_payload.append(json.dumps(agent_users_dict))
 
-    send_payloads(URL, end_user_payload, session, "users")  # send end-users payloads
+    send_payloads(end_users_url_endpoint, end_user_payload, session, "users")  # send end-users payloads
 
-    send_payloads("https://z3nplatformdevjg.zendesk.com/api/v2/users/create_or_update_many.json", agents_payload,
-                  session, "users")
+    send_payloads(agent_url_endpoint, agents_payload,session, "users")
 
 
 # This function reads the data from the csv file
@@ -525,17 +521,17 @@ def main():
     tickets_data = read_csv(tickets_file)
     users_data = read_csv(users_file)
 
-    create_organizations(organizations_data, session)  # Create organizations
+    import_organizations(organizations_data, session)  # Create organizations
     org_map = get_org_map(session)    # organization map with { external id: org_id }
     org_memberships = {}  # map of members with multi memberships
 
-    create_users(users_data, session, org_map, org_memberships)  # Create users
+    import_users(users_data, session, org_map, org_memberships)  # Create users
     user_map = get_user_map(session)  # user map with {external id: user_id }
 
-    create_org_memberships(session, org_memberships, user_map) # Create memberships for users with multi org's
+    import_org_memberships(session, org_memberships, user_map) # Create memberships for users with multi org's
     comments = get_comments(comments_data)  # get comments
 
-    create_tickets(tickets_data, session, user_map, org_map, comments) # create tickets
+    import_tickets(tickets_data, session, user_map, comments) # create tickets
     exit(0)
 
 
