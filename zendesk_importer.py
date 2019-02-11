@@ -51,6 +51,7 @@ def get_user_map(session):
             url = response['next_page']
     return user_map
 
+
 # extract comments from file and return comments
 def get_comments(file):
     comments = []  # array to return full of comments
@@ -62,7 +63,7 @@ def get_comments(file):
         created_at = validate(file[i][4])
         parent_ticket_id = validate(file[i][5])
 
-        if (int(author_id) < 0):
+        if (int(author_id) < 0): # handles special cases where author_id == -1
             author_id = '376281270772'
 
         data = {
@@ -198,7 +199,7 @@ def send_job_statuses_request(status_list, session, retry_attempts=5):
                 print("Retry Limit reached")
         print(err)
 
-
+# Prepares dispatch process
 def send_payloads(URL, payloads, session, type):
     status_list = []
     # iterates through the payloads and post one payload at a time to a Zendesk Instance
@@ -207,7 +208,8 @@ def send_payloads(URL, payloads, session, type):
     # Poll job status endpoint until all jobs complete or any one job fails
     check_job_statuses(status_list, session)
 
-#  Post request to URL endpoint and handle 400 < errors
+
+#  Post request to URL endpoint, handles 400 < errors, and handles 429 rate limited error
 def send_create_many_request(URL, payload, session, status_list, type, retry_attempts=5):
     try:
         retry_attempts -= 1
@@ -226,6 +228,7 @@ def send_create_many_request(URL, payload, session, status_list, type, retry_att
         print(err)
         print_external_ids(payload, type)
 
+
 # get external ID's from payload being sent
 def print_external_ids(payload, type):
     failed_items = json.loads(payload)[type]
@@ -233,6 +236,7 @@ def print_external_ids(payload, type):
     print("Failed to import this batch of ", type, ": ", failed_ids)
 
 
+# Function imports tickets into a zendesk instance
 def import_tickets(tickets, session, user_map, comments):
     URL = 'https://z3nplatformdevjg.zendesk.com/api/v2/imports/tickets/create_many.json'  # api-endpoint
     payloads = []  # array of payloads to be sent
@@ -284,7 +288,6 @@ def import_tickets(tickets, session, user_map, comments):
                 'start date': date,
                 'subscription': subscription
             }
-
         }
         # Check for special cases were the submitter,requester, or assignee do not exist
         # then use a Generic Agent user (ID: 376281270772)
@@ -304,8 +307,7 @@ def import_tickets(tickets, session, user_map, comments):
     send_payloads(URL, payloads, session, 'tickets')
 
 
-
-# Function creates multi organization memberships for users with more than one membership
+# Function imports multi organization memberships for users with more than one membership
 def import_org_memberships(session, org_memberships, user_map):
     URL = "https://z3nplatformdevjg.zendesk.com/api/v2/organization_memberships/create_many.json"
     payload = []
@@ -342,7 +344,7 @@ def import_org_memberships(session, org_memberships, user_map):
     send_payloads(URL, payload, session, 'organization_memberships')  # send payloads
 
 
-# Function creates organizations into the zendesk instance
+# Function imports organizations into the zendesk instance
 def import_organizations(organizations, session):
     URL = "https://z3nplatformdevjg.zendesk.com/api/v2/organizations/create_many.json "
     payloads = []  # payloads to be sent
@@ -394,7 +396,7 @@ def import_organizations(organizations, session):
     send_payloads(URL, payloads, session, "organizations")
 
 
-# Function creates both end-users and agent/admin users into the zendesk instance
+# Function imports both end-users and agent/admin users into the zendesk instance
 def import_users(users, session, org_map, org_memberships):
     # api-endpoints
     end_users_url_endpoint = "https://z3nplatformdevjg.zendesk.com/api/v2/users/create_many.json"
@@ -492,10 +494,10 @@ def import_users(users, session, org_map, org_memberships):
 
     send_payloads(end_users_url_endpoint, end_user_payload, session, "users")  # send end-users payloads
 
-    send_payloads(agent_url_endpoint, agents_payload,session, "users")
+    send_payloads(agent_url_endpoint, agents_payload,session, "users")# admin and agent users payloads
 
 
-# This function reads the data from the csv file
+# This function reads the data from the csv file and returns a list
 def read_csv(file):
     csvReader = csv.reader(file)
     data = list(csvReader)
@@ -507,7 +509,7 @@ def main():
     # creates a requests session object and configures it with your authentication information.
     session = requests.Session()
     session.headers = {'Content-Type': 'application/json'}
-    session.auth = 'username', 'password'
+    session.auth = 'garciajrjoseluis@gmail.com/token', 'cka0QxV0wyvVWhlYWDm8krjvW1trkPymWYYSN3cQ'
 
     # Opening csv files
     organizations_file = open('organizations.csv')
@@ -521,17 +523,17 @@ def main():
     tickets_data = read_csv(tickets_file)
     users_data = read_csv(users_file)
 
-    import_organizations(organizations_data, session)  # Create organizations
+    import_organizations(organizations_data, session)  # import organizations
     org_map = get_org_map(session)    # organization map with { external id: org_id }
     org_memberships = {}  # map of members with multi memberships
 
-    import_users(users_data, session, org_map, org_memberships)  # Create users
+    import_users(users_data, session, org_map, org_memberships)  # import users
     user_map = get_user_map(session)  # user map with {external id: user_id }
 
-    import_org_memberships(session, org_memberships, user_map) # Create memberships for users with multi org's
+    import_org_memberships(session, org_memberships, user_map) # import memberships for users with multi org's
     comments = get_comments(comments_data)  # get comments
 
-    import_tickets(tickets_data, session, user_map, comments) # create tickets
+    import_tickets(tickets_data, session, user_map, comments) # import tickets
     exit(0)
 
 
