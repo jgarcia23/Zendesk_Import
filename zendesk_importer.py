@@ -145,29 +145,92 @@ def validate_organization(org_value, org_map, org_array):
         return org_map[org_value], org_array
 
 
-def send_request(URL, payload, session, retry_attempts):
+# Check the job statuses of each payload delivered
+def check_job_statuses(status_list, session):
+    completed = False
+
+    while not completed:  # loop until all jobs are done
+        success_count = 0
+        response = send_job_statuses_request(status_list, session)
+        for job_status in response['job_statuses']:
+            status = job_status['status']
+            if status == "queued" or status == "working":
+                print('In progress...')
+                print('In progress`: ', job_status)
+                time.sleep(10)
+                break
+            elif status == "failed" or status == "killed":
+                print('Failed')
+                exit()
+            elif status == 'completed':
+                success_count += 1
+                total_count = response['count']
+                print('Success count: ', success_count, '/', total_count)
+                if success_count == total_count:
+                    completed = True
+                    print('Successfully imported a batch')
+
+
+def send_job_statuses_request(status_list, session, retry_attempts=5):
+    print(status_list)
+    status_id_list = list(map(lambda status: status['job_status']['id'], status_list))
+
+    # TODO validate that len status_id_list <= 100, break up into multi request if not
+    # creating a string of id to show i.g  ids= 1,2,3
+    url_paste = ",".join(str(x) for x in status_id_list)
+    url = 'https://z3nplatformdevjg.zendesk.com/api/v2/job_statuses/show_many.json?ids=' + url_paste
+
     try:
         retry_attempts -= 1
-        r = session.post(URL, data=payload)
+        r = session.get(url)
         r.raise_for_status()
+        job_statuses = r.json()
+        return job_statuses
+
     except requests.HTTPError as err:
         if r.status_code == 429:  # rate limited error code
             print("Rate is limited. Waiting to retry...")
             time.sleep(int(r.headers['retry-after']))
             if retry_attempts > 0:
-                send_request(URL, payload, session, retry_attempts)
+                send_job_statuses_request(status_list, session, retry_attempts)
             else:
                 print("Retry Limit reached")
-                print_ticket_ids(payload)
-        elif r.status_code >= 500:
-            print(err)
-            print_ticket_ids(payload)
+        print(err)
 
 
-def print_ticket_ids(payload):
-    failed_tickets = json.loads(payload)['tickets']
-    failed_tickets_ids = list(map(lambda ticket: ticket['external_id'], failed_tickets))
-    print("Failed to import this batch of tickets: ", failed_tickets_ids)
+def send_payloads(URL, payloads, session, type):
+    status_list = []
+    # iterates through the payloads and post one payload at a time to a Zendesk Instance
+    for payload in payloads:
+        send_create_many_request(URL, payload, session, status_list, type)
+    # Poll job status endpoint until all jobs complete or any one job fails
+    check_job_statuses(status_list, session)
+
+
+def send_create_many_request(URL, payload, session, status_list, type, retry_attempts=5):
+    try:
+        retry_attempts -= 1
+        r = session.post(URL, data=payload)
+        r.raise_for_status()
+        job_status = r.json()
+        status_list.append(job_status)
+    except requests.HTTPError as err:
+        if r.status_code == 429:  # rate limited error code
+            print("Rate is limited. Waiting to retry...")
+            time.sleep(int(r.headers['retry-after']))
+            if retry_attempts > 0:
+                send_create_many_request(URL, payload, session, retry_attempts)
+            else:
+                print("Retry Limit reached")
+        print(err)
+        print_external_ids(payload, type)
+
+
+def print_external_ids(payload, type):
+    failed_items = json.loads(payload)[type]
+    failed_ids = failed_items if type == 'organization_memberships' else list(
+        map(lambda resource: resource['external_id'], failed_items))
+    print("Failed to import this batch of ", type, ": ", failed_ids)
 
 
 def create_tickets(tickets, session, user_map, org_map, comments):
@@ -237,9 +300,10 @@ def create_tickets(tickets, session, user_map, org_map, comments):
     # check if any data is in the dictionary since it does not always reach 100
     if tickets_dict["tickets"]:
         payloads.append(json.dumps(tickets_dict))
-    # print(payloads)
-    for payload in payloads:
-        send_request(URL, payload, session, 5)
+
+    send_payloads(URL, payloads, session, 'tickets')
+    # for payload in payloads:
+    #     send_request(URL, payload, session, 5)
 
 
 # Function creates multi organization memberships for users with more than one membership
@@ -276,7 +340,7 @@ def create_org_memberships(session, org_memberships, user_map):
     if org_dict["organization_memberships"]:  # check if any extra data is in the dic
         payload.append(json.dumps(org_dict))
 
-    send_payloads(URL, payload, session)  # send payloads
+    send_payloads(URL, payload, session, 'organization_memberships')  # send payloads
 
 
 # Function creates organizations into the zendesk instance
@@ -327,7 +391,7 @@ def create_organizations(organizations, session):
         payloads.append(json.dumps(org_dict))
 
     # iterate through the payloads list and post one payload at a time to Zendesk Support
-    send_payloads(URL, payloads, session)
+    send_payloads(URL, payloads, session, "organizations")
 
 
 # Function creates both end-users and agent/admin users into the zendesk instance
@@ -429,67 +493,16 @@ def create_users(users, session, org_map, org_memberships):
     if agent_users_dict["users"]:
         agents_payload.append(json.dumps(agent_users_dict))
 
-    send_payloads(URL, end_user_payload, session)  # send end-users payloads
+    send_payloads(URL, end_user_payload, session, "users")  # send end-users payloads
 
     send_payloads("https://z3nplatformdevjg.zendesk.com/api/v2/users/create_or_update_many.json", agents_payload,
-                  session)
-
-
-# Check the job statuses of each payload delivered
-def job_statuses(status_list, session):
-    status_id_list = []  # list for org id
-    for line in status_list:
-        id = line['job_status']['id']  # get the id
-        status_id_list.append(id)
-
-    # creating a string of id to show i.g  ids= 1,2,3
-    url_paste = ",".join(str(x) for x in status_id_list)
-    url = 'https://z3nplatformdevjg.zendesk.com/api/v2/job_statuses/show_many.json?ids=' + url_paste
-    r = session.get(url)
-    response = r.json()
-    completed = False
-
-    while not completed:  # loop until all jobs are done
-
-        for status in response['job_statuses']:
-            status = status['status']
-            if status == "queued" or status == "working":
-                # success_count = 0
-                print('In progress...')
-                time.sleep(10)
-                continue
-            elif status == "failed" or status == "killed":
-                print('Failed')
-                time.sleep(5)
-                exit()
-            elif status == 'completed':
-                # success_count += 1
-                # if success_count == response['count']:
-                completed = True
-                print('Successfully imported a batch of organizations')
-                break
-                # continue
-            continue  # Continue checking job statuses if not all are completed
-        response = r.json()
-
-
-# Function iterates through the payloads and post one payload at a time to a Zendesk Instance
-def send_payloads(URL, payloads, session):
-    for payload in payloads:
-        r = session.post(URL, data=payload)
-        result = r.json()
-        if r.status_code >= 400:  # error code above 400 is a Bad Request error is an HTTP status code
-            print('Error with status code {}'.format(r.status_code))
-            exit()
-        print('Succesfully sent check job statuses for more information')
-        print(result)
+                  session, "users")
 
 
 # This function reads the data from the csv file
 def read_csv(file):
     csvReader = csv.reader(file)
     data = list(csvReader)
-    # header = data[:1]
     return data
 
 
@@ -512,18 +525,17 @@ def main():
     tickets_data = read_csv(tickets_file)
     users_data = read_csv(users_file)
 
-    # create_organizations(organizations_data, session)  # Create organizations
-    # organization map with { external id: org_id }
-    org_map = get_org_map(session)
+    create_organizations(organizations_data, session)  # Create organizations
+    org_map = get_org_map(session)    # organization map with { external id: org_id }
     org_memberships = {}  # map of members with multi memberships
 
-    # create_users(users_data, session, org_map, org_memberships)  # Create users
+    create_users(users_data, session, org_map, org_memberships)  # Create users
     user_map = get_user_map(session)  # user map with {external id: user_id }
 
-    # create_org_memberships(session, org_memberships, user_map) # Create memberships for users with multi org's
+    create_org_memberships(session, org_memberships, user_map) # Create memberships for users with multi org's
     comments = get_comments(comments_data)  # get comments
-    # Create tickets (note* rate is limited due to free trial)
-    create_tickets(tickets_data, session, user_map, org_map, comments)
+
+    create_tickets(tickets_data, session, user_map, org_map, comments) # create tickets
     exit(0)
 
 
