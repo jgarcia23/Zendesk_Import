@@ -234,7 +234,8 @@ def print_external_ids(payload, type):
 
 
 def import_tickets(tickets, session, user_map, comments):
-    URL = 'https://z3nplatformdevjg.zendesk.com/api/v2/imports/tickets/create_many.json'  # api-endpoint
+    # URL = 'https://z3nplatformdevjg.zendesk.com/api/v2/imports/tickets/create_many.json'  # api-endpoint (502 error)
+    URL = 'https://z3nplatformdevjg.zendesk.com/api/v2/tickets/create_many.json' # api-endpoint
     payloads = []  # array of payloads to be sent
     tickets_dict = {"tickets": []}  # tickets dictionary
 
@@ -521,14 +522,14 @@ def main():
     tickets_data = read_csv(tickets_file)
     users_data = read_csv(users_file)
 
-    import_organizations(organizations_data, session)  # Create organizations
+    # import_organizations(organizations_data, session)  # Create organizations
     org_map = get_org_map(session)    # organization map with { external id: org_id }
     org_memberships = {}  # map of members with multi memberships
 
-    import_users(users_data, session, org_map, org_memberships)  # Create users
+    # import_users(users_data, session, org_map, org_memberships)  # Create users
     user_map = get_user_map(session)  # user map with {external id: user_id }
 
-    import_org_memberships(session, org_memberships, user_map) # Create memberships for users with multi org's
+    # import_org_memberships(session, org_memberships, user_map) # Create memberships for users with multi org's
     comments = get_comments(comments_data)  # get comments
 
     import_tickets(tickets_data, session, user_map, comments) # create tickets
