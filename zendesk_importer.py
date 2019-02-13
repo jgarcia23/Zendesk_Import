@@ -238,6 +238,7 @@ def print_external_ids(payload, type):
 
 # Function imports tickets into a zendesk instance
 def import_tickets(tickets, session, user_map, comments):
+
     URL = 'https://z3nplatformdevjg.zendesk.com/api/v2/imports/tickets/create_many.json'  # api-endpoint
     payloads = []  # array of payloads to be sent
     tickets_dict = {"tickets": []}  # tickets dictionary
@@ -299,7 +300,7 @@ def import_tickets(tickets, session, user_map, comments):
         if len(tickets_dict["tickets"]) == 50:
             payloads.append(json.dumps(tickets_dict))
             tickets_dict = {"tickets": []}  # reset dict
-    # print(count)
+
     # check if any data is in the dictionary since it does not always reach 100
     if tickets_dict["tickets"]:
         payloads.append(json.dumps(tickets_dict))
@@ -509,7 +510,7 @@ def main():
     # creates a requests session object and configures it with your authentication information.
     session = requests.Session()
     session.headers = {'Content-Type': 'application/json'}
-    session.auth = 'garciajrjoseluis@gmail.com/token', 'cka0QxV0wyvVWhlYWDm8krjvW1trkPymWYYSN3cQ'
+    session.auth = 'username', 'password'
 
     # Opening csv files
     organizations_file = open('organizations.csv')
