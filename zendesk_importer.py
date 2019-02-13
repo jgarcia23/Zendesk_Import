@@ -51,9 +51,11 @@ def get_user_map(session):
             url = response['next_page']
     return user_map
 
-# extract comments from file and return comments
-def get_comments(file):
-    comments = []  # array to return full of comments
+
+# create dict with "external id" as key and value is the comment body then return;
+def get_comments(file, user_map):
+    comments_map = {}  # dict to return full of comments
+
     for i in range(1, len(file)):  # iterate through all file comments
 
         author_id = validate(file[i][1])
@@ -62,7 +64,9 @@ def get_comments(file):
         created_at = validate(file[i][4])
         parent_ticket_id = validate(file[i][5])
 
-        if (int(author_id) < 0):
+        if author_id in user_map:
+            author_id = user_map[author_id]
+        else:
             author_id = '376281270772'
 
         data = {
@@ -72,9 +76,8 @@ def get_comments(file):
             "created_at": created_at,
             "parent_ticket_id": parent_ticket_id
         }
-
-        comments.append(data)
-    return comments
+        comments_map[parent_ticket_id] = data
+    return comments_map
 
 
 # Function translates statuses from Legacy Status to Zendesk Status
@@ -220,7 +223,7 @@ def send_create_many_request(URL, payload, session, status_list, type, retry_att
             print("Rate is limited. Waiting to retry...")
             time.sleep(int(r.headers['retry-after']))
             if retry_attempts > 0:
-                send_create_many_request(URL, payload, session, retry_attempts) # recurse
+                send_create_many_request(URL, payload, session, status_list, type, retry_attempts) # recurse
             else:
                 print("Retry Limit reached")
         print(err)
@@ -233,14 +236,15 @@ def print_external_ids(payload, type):
     print("Failed to import this batch of ", type, ": ", failed_ids)
 
 
-def import_tickets(tickets, session, user_map, comments):
-    # URL = 'https://z3nplatformdevjg.zendesk.com/api/v2/imports/tickets/create_many.json'  # api-endpoint (502 error)
-    URL = 'https://z3nplatformdevjg.zendesk.com/api/v2/tickets/create_many.json' # api-endpoint
+def import_tickets(tickets, session, user_map, comments_map):
+    URL = 'https://z3nplatformdevjg.zendesk.com/api/v2/imports/tickets/create_many.json'  # api-endpoint (502 error)
+    # URL = 'https://z3nplatformdevjg.zendesk.com/api/v2/tickets/create_many.json' # api-endpoint
     payloads = []  # array of payloads to be sent
     tickets_dict = {"tickets": []}  # tickets dictionary
 
     # iterate through all tickets
     for i in range(1, len(tickets)):
+        comments = []
         #  tagging my name
         try:
             tags = json.loads(validate_array(tickets[i][17]))
@@ -265,7 +269,7 @@ def import_tickets(tickets, session, user_map, comments):
         submitter = tickets[i][6]
         requester = tickets[i][7]
         assignee = tickets[i][1]
-
+        comments.append(comments_map[external_id]) # append comments in json format
         data = {
             "external_id": external_id,
             "created_at": created_at,
@@ -294,16 +298,15 @@ def import_tickets(tickets, session, user_map, comments):
         tickets_dict["tickets"].append(data)  # add data to tickets dict
 
         # check if dict reaches the limit of 100 if-so dump in payloads
-        if len(tickets_dict["tickets"]) == 50:
+        if len(tickets_dict["tickets"]) == 100:
             payloads.append(json.dumps(tickets_dict))
             tickets_dict = {"tickets": []}  # reset dict
-    # print(count)
+
     # check if any data is in the dictionary since it does not always reach 100
     if tickets_dict["tickets"]:
         payloads.append(json.dumps(tickets_dict))
 
     send_payloads(URL, payloads, session, 'tickets')
-
 
 
 # Function creates multi organization memberships for users with more than one membership
@@ -345,7 +348,7 @@ def import_org_memberships(session, org_memberships, user_map):
 
 # Function creates organizations into the zendesk instance
 def import_organizations(organizations, session):
-    URL = "https://z3nplatformdevjg.zendesk.com/api/v2/organizations/create_many.json "
+    URL = "https://z3nplatformdevjg.zendesk.com/api/v2/organizations/create_many.json"
     payloads = []  # payloads to be sent
     org_dict = {"organizations": []}
     status_list = []
@@ -530,11 +533,10 @@ def main():
     user_map = get_user_map(session)  # user map with {external id: user_id }
 
     # import_org_memberships(session, org_memberships, user_map) # Create memberships for users with multi org's
-    comments = get_comments(comments_data)  # get comments
+    comments_map = get_comments(comments_data,user_map)  # get
 
-    import_tickets(tickets_data, session, user_map, comments) # create tickets
+    import_tickets(tickets_data, session, user_map, comments_map) # create tickets
     exit(0)
-
 
 if __name__ == '__main__':
     main()
