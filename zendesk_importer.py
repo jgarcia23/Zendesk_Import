@@ -297,7 +297,7 @@ def import_tickets(tickets, session, user_map, comments):
         tickets_dict["tickets"].append(data)  # add data to tickets dict
 
         # check if dict reaches the limit of 100 if-so dump in payloads
-        if len(tickets_dict["tickets"]) == 50:
+        if len(tickets_dict["tickets"]) == 100:
             payloads.append(json.dumps(tickets_dict))
             tickets_dict = {"tickets": []}  # reset dict
 
