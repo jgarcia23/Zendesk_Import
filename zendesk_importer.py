@@ -237,8 +237,7 @@ def print_external_ids(payload, type):
 
 
 def import_tickets(tickets, session, user_map, comments_map):
-    URL = 'https://z3nplatformdevjg.zendesk.com/api/v2/imports/tickets/create_many.json'  # api-endpoint (502 error)
-    # URL = 'https://z3nplatformdevjg.zendesk.com/api/v2/tickets/create_many.json' # api-endpoint
+    URL = 'https://z3nplatformdevjg.zendesk.com/api/v2/imports/tickets/create_many.json'  # api-endpoint 
     payloads = []  # array of payloads to be sent
     tickets_dict = {"tickets": []}  # tickets dictionary
 
