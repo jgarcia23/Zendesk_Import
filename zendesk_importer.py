@@ -52,9 +52,10 @@ def get_user_map(session):
     return user_map
 
 
-# extract comments from file and return comments
-def get_comments(file):
-    comments = []  # array to return full of comments
+# create dict with "external id" as key and value is the comment body then return;
+def get_comments(file, user_map):
+    comments_map = {}  # dict to return full of comments
+
     for i in range(1, len(file)):  # iterate through all file comments
 
         author_id = validate(file[i][1])
@@ -63,7 +64,9 @@ def get_comments(file):
         created_at = validate(file[i][4])
         parent_ticket_id = validate(file[i][5])
 
-        if (int(author_id) < 0): # handles special cases where author_id == -1
+        if author_id in user_map:
+            author_id = user_map[author_id]
+        else:
             author_id = '376281270772'
 
         data = {
@@ -73,9 +76,8 @@ def get_comments(file):
             "created_at": created_at,
             "parent_ticket_id": parent_ticket_id
         }
-
-        comments.append(data)
-    return comments
+        comments_map[parent_ticket_id] = data
+    return comments_map
 
 
 # Function translates statuses from Legacy Status to Zendesk Status
@@ -199,7 +201,7 @@ def send_job_statuses_request(status_list, session, retry_attempts=5):
                 print("Retry Limit reached")
         print(err)
 
-# Prepares dispatch process
+
 def send_payloads(URL, payloads, session, type):
     status_list = []
     # iterates through the payloads and post one payload at a time to a Zendesk Instance
@@ -208,8 +210,7 @@ def send_payloads(URL, payloads, session, type):
     # Poll job status endpoint until all jobs complete or any one job fails
     check_job_statuses(status_list, session)
 
-
-#  Post request to URL endpoint, handles 400 < errors, and handles 429 rate limited error
+#  Post request to URL endpoint and handle 400 < errors
 def send_create_many_request(URL, payload, session, status_list, type, retry_attempts=5):
     try:
         retry_attempts -= 1
@@ -222,12 +223,11 @@ def send_create_many_request(URL, payload, session, status_list, type, retry_att
             print("Rate is limited. Waiting to retry...")
             time.sleep(int(r.headers['retry-after']))
             if retry_attempts > 0:
-                send_create_many_request(URL, payload, session, retry_attempts) # recurse
+                send_create_many_request(URL, payload, session, status_list, type, retry_attempts) # recurse
             else:
                 print("Retry Limit reached")
         print(err)
         print_external_ids(payload, type)
-
 
 # get external ID's from payload being sent
 def print_external_ids(payload, type):
@@ -236,15 +236,15 @@ def print_external_ids(payload, type):
     print("Failed to import this batch of ", type, ": ", failed_ids)
 
 
-# Function imports tickets into a zendesk instance
-def import_tickets(tickets, session, user_map, comments):
-
-    URL = 'https://z3nplatformdevjg.zendesk.com/api/v2/imports/tickets/create_many.json'  # api-endpoint
+def import_tickets(tickets, session, user_map, comments_map):
+    URL = 'https://z3nplatformdevjg.zendesk.com/api/v2/imports/tickets/create_many.json'  # api-endpoint (502 error)
+    # URL = 'https://z3nplatformdevjg.zendesk.com/api/v2/tickets/create_many.json' # api-endpoint
     payloads = []  # array of payloads to be sent
     tickets_dict = {"tickets": []}  # tickets dictionary
 
     # iterate through all tickets
     for i in range(1, len(tickets)):
+        comments = []
         #  tagging my name
         try:
             tags = json.loads(validate_array(tickets[i][17]))
@@ -269,7 +269,7 @@ def import_tickets(tickets, session, user_map, comments):
         submitter = tickets[i][6]
         requester = tickets[i][7]
         assignee = tickets[i][1]
-
+        comments.append(comments_map[external_id]) # append comments in json format
         data = {
             "external_id": external_id,
             "created_at": created_at,
@@ -289,6 +289,7 @@ def import_tickets(tickets, session, user_map, comments):
                 'start date': date,
                 'subscription': subscription
             }
+
         }
         # Check for special cases were the submitter,requester, or assignee do not exist
         # then use a Generic Agent user (ID: 376281270772)
@@ -297,7 +298,7 @@ def import_tickets(tickets, session, user_map, comments):
         tickets_dict["tickets"].append(data)  # add data to tickets dict
 
         # check if dict reaches the limit of 100 if-so dump in payloads
-        if len(tickets_dict["tickets"]) == 100:
+        if len(tickets_dict["tickets"]) == 50:
             payloads.append(json.dumps(tickets_dict))
             tickets_dict = {"tickets": []}  # reset dict
 
@@ -308,7 +309,7 @@ def import_tickets(tickets, session, user_map, comments):
     send_payloads(URL, payloads, session, 'tickets')
 
 
-# Function imports multi organization memberships for users with more than one membership
+# Function creates multi organization memberships for users with more than one membership
 def import_org_memberships(session, org_memberships, user_map):
     URL = "https://z3nplatformdevjg.zendesk.com/api/v2/organization_memberships/create_many.json"
     payload = []
@@ -345,9 +346,9 @@ def import_org_memberships(session, org_memberships, user_map):
     send_payloads(URL, payload, session, 'organization_memberships')  # send payloads
 
 
-# Function imports organizations into the zendesk instance
+# Function creates organizations into the zendesk instance
 def import_organizations(organizations, session):
-    URL = "https://z3nplatformdevjg.zendesk.com/api/v2/organizations/create_many.json "
+    URL = "https://z3nplatformdevjg.zendesk.com/api/v2/organizations/create_many.json"
     payloads = []  # payloads to be sent
     org_dict = {"organizations": []}
     status_list = []
@@ -397,7 +398,7 @@ def import_organizations(organizations, session):
     send_payloads(URL, payloads, session, "organizations")
 
 
-# Function imports both end-users and agent/admin users into the zendesk instance
+# Function creates both end-users and agent/admin users into the zendesk instance
 def import_users(users, session, org_map, org_memberships):
     # api-endpoints
     end_users_url_endpoint = "https://z3nplatformdevjg.zendesk.com/api/v2/users/create_many.json"
@@ -495,10 +496,10 @@ def import_users(users, session, org_map, org_memberships):
 
     send_payloads(end_users_url_endpoint, end_user_payload, session, "users")  # send end-users payloads
 
-    send_payloads(agent_url_endpoint, agents_payload,session, "users")# admin and agent users payloads
+    send_payloads(agent_url_endpoint, agents_payload,session, "users")
 
 
-# This function reads the data from the csv file and returns a list
+# This function reads the data from the csv file
 def read_csv(file):
     csvReader = csv.reader(file)
     data = list(csvReader)
@@ -524,19 +525,18 @@ def main():
     tickets_data = read_csv(tickets_file)
     users_data = read_csv(users_file)
 
-    import_organizations(organizations_data, session)  # import organizations
+    # import_organizations(organizations_data, session)  # Create organizations
     org_map = get_org_map(session)    # organization map with { external id: org_id }
     org_memberships = {}  # map of members with multi memberships
 
-    import_users(users_data, session, org_map, org_memberships)  # import users
+    # import_users(users_data, session, org_map, org_memberships)  # Create users
     user_map = get_user_map(session)  # user map with {external id: user_id }
 
-    import_org_memberships(session, org_memberships, user_map) # import memberships for users with multi org's
-    comments = get_comments(comments_data)  # get comments
+    # import_org_memberships(session, org_memberships, user_map) # Create memberships for users with multi org's
+    comments_map = get_comments(comments_data,user_map)  # get
 
-    import_tickets(tickets_data, session, user_map, comments) # import tickets
+    import_tickets(tickets_data, session, user_map, comments_map) # create tickets
     exit(0)
-
 
 if __name__ == '__main__':
     main()
