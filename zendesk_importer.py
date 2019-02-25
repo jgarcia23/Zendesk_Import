@@ -52,7 +52,7 @@ def get_user_map(session):
     return user_map
 
 
-# create dict with "external id" as key and value is the comment body then return;
+# create dict with "parent_ticket_id" as key and value is the comment body then return;
 def get_comments(file, user_map):
     comments_map = {}  # dict to return full of comments
 
@@ -76,7 +76,11 @@ def get_comments(file, user_map):
             "created_at": created_at,
             "parent_ticket_id": parent_ticket_id
         }
-        comments_map[parent_ticket_id] = data
+        if parent_ticket_id not in comments_map:
+            comments_map[parent_ticket_id] = [data]
+        else:
+            comments_map[parent_ticket_id].append(data)
+
     return comments_map
 
 
@@ -135,7 +139,7 @@ def validate_array(str):
     return str.strip()
 
 
-#  Function checks if users is linked to multi organizations if so convert info to array and return
+#  Function checks if users is linked to multi organizations
 def validate_organization(org_value, org_map, org_array):
     if org_value[0] == '[':
         external_org_ids = json.loads(validate_array(org_value))
@@ -201,7 +205,7 @@ def send_job_statuses_request(status_list, session, retry_attempts=5):
                 print("Retry Limit reached")
         print(err)
 
-
+# sends payloads
 def send_payloads(URL, payloads, session, type):
     status_list = []
     # iterates through the payloads and post one payload at a time to a Zendesk Instance
@@ -232,12 +236,13 @@ def send_create_many_request(URL, payload, session, status_list, type, retry_att
 # get external ID's from payload being sent
 def print_external_ids(payload, type):
     failed_items = json.loads(payload)[type]
+    # Ternary Operator (a if condition else b)
     failed_ids = failed_items if type == 'organization_memberships' else list(map(lambda resource: resource['external_id'], failed_items))
     print("Failed to import this batch of ", type, ": ", failed_ids)
 
 
 def import_tickets(tickets, session, user_map, comments_map):
-    URL = 'https://z3nplatformdevjg.zendesk.com/api/v2/imports/tickets/create_many.json'  # api-endpoint 
+    URL = 'https://z3nplatformdevjg.zendesk.com/api/v2/imports/tickets/create_many.json'  # api-endpoint (502 error)
     payloads = []  # array of payloads to be sent
     tickets_dict = {"tickets": []}  # tickets dictionary
 
@@ -268,7 +273,8 @@ def import_tickets(tickets, session, user_map, comments_map):
         submitter = tickets[i][6]
         requester = tickets[i][7]
         assignee = tickets[i][1]
-        comments.append(comments_map[external_id]) # append comments in json format
+        comments.extend(comments_map[external_id]) # append comments in json format
+
         data = {
             "external_id": external_id,
             "created_at": created_at,
@@ -507,7 +513,7 @@ def read_csv(file):
 
 # Main function
 def main():
-    # creates a requests session object and configures it with your authentication information.
+    # Use session object to persist the api credentials across request.
     session = requests.Session()
     session.headers = {'Content-Type': 'application/json'}
     session.auth = 'username', 'password'
@@ -524,14 +530,14 @@ def main():
     tickets_data = read_csv(tickets_file)
     users_data = read_csv(users_file)
 
-    # import_organizations(organizations_data, session)  # Create organizations
+    import_organizations(organizations_data, session)  # Create organizations
     org_map = get_org_map(session)    # organization map with { external id: org_id }
     org_memberships = {}  # map of members with multi memberships
 
-    # import_users(users_data, session, org_map, org_memberships)  # Create users
+    import_users(users_data, session, org_map, org_memberships)  # Create users
     user_map = get_user_map(session)  # user map with {external id: user_id }
 
-    # import_org_memberships(session, org_memberships, user_map) # Create memberships for users with multi org's
+    import_org_memberships(session, org_memberships, user_map) # Create memberships for users with multi org's
     comments_map = get_comments(comments_data,user_map)  # get
 
     import_tickets(tickets_data, session, user_map, comments_map) # create tickets
